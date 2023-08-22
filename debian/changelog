@@ -1,3 +1,15 @@
+cryptsetup (2:2.4.3-1ubuntu1.2) jammy; urgency=medium
+
+  * Cherry-pick modern support for FIPS enabled backends. LP: #2032659
+    - cherry-pick v2.6.0 change to correct FIPS mode detection, and
+    correctly use OpenSSL backend in FIPS-compliant way, if OpenSSL is in
+    FIPS mode.
+    - cherry-pick v2.6.0 fixes to benchmark function that works with
+    OpenSSL in 140-3 FIPS mode.
+    - Enable the optional runtime FIPS codepath
+
+ -- Dimitri John Ledkov <dimitri.ledkov@canonical.com>  Tue, 22 Aug 2023 18:16:42 +0100
+
 cryptsetup (2:2.4.3-1ubuntu1.1) jammy; urgency=medium
 
   * d/initramfs/hooks/cryptroot: Include OpenSSL legacy.so for ripemd160 and

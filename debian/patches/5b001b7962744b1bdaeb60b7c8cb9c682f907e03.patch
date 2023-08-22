@@ -1,0 +1,246 @@
+From 5b001b7962744b1bdaeb60b7c8cb9c682f907e03 Mon Sep 17 00:00:00 2001
+From: Ondrej Kozina <okozina@redhat.com>
+Date: Tue, 28 Jun 2022 16:23:34 +0200
+Subject: [PATCH] Delegate FIPS mode detection to configured crypto backend.
+
+System FIPS mode check is no longer dependent on /etc/system-fips
+file. The change should be compatible with older distributions since
+we now depend on crypto backend internal routine.
+
+This commit affects only FIPS enabled systems (with FIPS enabled
+builds). In case this causes any regression in current distributions
+feel free to drop the patch.
+
+For reference see https://bugzilla.redhat.com/show_bug.cgi?id=2080516
+---
+ lib/Makemodule.am                   |  2 --
+ lib/crypto_backend/crypto_backend.h |  3 ++
+ lib/crypto_backend/crypto_gcrypt.c  | 17 +++++++++
+ lib/crypto_backend/crypto_kernel.c  |  5 +++
+ lib/crypto_backend/crypto_nettle.c  |  5 +++
+ lib/crypto_backend/crypto_nss.c     |  5 +++
+ lib/crypto_backend/crypto_openssl.c | 26 ++++++++++++++
+ lib/internal.h                      |  1 -
+ lib/utils_fips.c                    | 55 -----------------------------
+ lib/utils_fips.h                    | 28 ---------------
+ po/POTFILES.in                      |  1 -
+ src/cryptsetup.h                    |  1 -
+ tests/compat-test                   |  2 +-
+ tests/compat-test2                  |  2 +-
+ tests/keyring-compat-test           |  2 +-
+ tests/luks2-reencryption-test       |  2 +-
+ 16 files changed, 65 insertions(+), 92 deletions(-)
+ delete mode 100644 lib/utils_fips.c
+ delete mode 100644 lib/utils_fips.h
+
+Index: cryptsetup-2.4.3/lib/Makemodule.am
+===================================================================
+--- cryptsetup-2.4.3.orig/lib/Makemodule.am
++++ cryptsetup-2.4.3/lib/Makemodule.am
+@@ -54,8 +54,6 @@ libcryptsetup_la_SOURCES = \
+ 	lib/utils_loop.h		\
+ 	lib/utils_devpath.c		\
+ 	lib/utils_wipe.c		\
+-	lib/utils_fips.c		\
+-	lib/utils_fips.h		\
+ 	lib/utils_device.c		\
+ 	lib/utils_keyring.c		\
+ 	lib/utils_keyring.h		\
+Index: cryptsetup-2.4.3/lib/crypto_backend/crypto_backend.h
+===================================================================
+--- cryptsetup-2.4.3.orig/lib/crypto_backend/crypto_backend.h
++++ cryptsetup-2.4.3/lib/crypto_backend/crypto_backend.h
+@@ -135,4 +135,7 @@ static inline void crypt_backend_memzero
+ #endif
+ }
+ 
++/* crypto backend running in FIPS mode */
++bool crypt_fips_mode(void);
++
+ #endif /* _CRYPTO_BACKEND_H */
+Index: cryptsetup-2.4.3/lib/crypto_backend/crypto_gcrypt.c
+===================================================================
+--- cryptsetup-2.4.3.orig/lib/crypto_backend/crypto_gcrypt.c
++++ cryptsetup-2.4.3/lib/crypto_backend/crypto_gcrypt.c
+@@ -550,3 +550,20 @@ out:
+ 	return -ENOTSUP;
+ #endif
+ }
++
++#if !ENABLE_FIPS
++bool crypt_fips_mode(void) { return false; }
++#else
++bool crypt_fips_mode(void)
++{
++	static bool fips_mode = false, fips_checked = false;
++
++	if (fips_checked)
++		return fips_mode;
++
++	fips_mode = gcry_fips_mode_active();
++	fips_checked = true;
++
++	return fips_mode;
++}
++#endif /* ENABLE FIPS */
+Index: cryptsetup-2.4.3/lib/crypto_backend/crypto_kernel.c
+===================================================================
+--- cryptsetup-2.4.3.orig/lib/crypto_backend/crypto_kernel.c
++++ cryptsetup-2.4.3/lib/crypto_backend/crypto_kernel.c
+@@ -416,3 +416,8 @@ int crypt_bitlk_decrypt_key(const void *
+ 	return crypt_bitlk_decrypt_key_kernel(key, key_length, in, out, length,
+ 					      iv, iv_length, tag, tag_length);
+ }
++
++bool crypt_fips_mode(void)
++{
++	return false;
++}
+Index: cryptsetup-2.4.3/lib/crypto_backend/crypto_nettle.c
+===================================================================
+--- cryptsetup-2.4.3.orig/lib/crypto_backend/crypto_nettle.c
++++ cryptsetup-2.4.3/lib/crypto_backend/crypto_nettle.c
+@@ -446,3 +446,8 @@ int crypt_bitlk_decrypt_key(const void *
+ 	return crypt_bitlk_decrypt_key_kernel(key, key_length, in, out, length,
+ 					      iv, iv_length, tag, tag_length);
+ }
++
++bool crypt_fips_mode(void)
++{
++	return false;
++}
+Index: cryptsetup-2.4.3/lib/crypto_backend/crypto_nss.c
+===================================================================
+--- cryptsetup-2.4.3.orig/lib/crypto_backend/crypto_nss.c
++++ cryptsetup-2.4.3/lib/crypto_backend/crypto_nss.c
+@@ -395,3 +395,8 @@ int crypt_bitlk_decrypt_key(const void *
+ 	return crypt_bitlk_decrypt_key_kernel(key, key_length, in, out, length,
+ 					      iv, iv_length, tag, tag_length);
+ }
++
++bool crypt_fips_mode(void)
++{
++	return false;
++}
+Index: cryptsetup-2.4.3/lib/crypto_backend/crypto_openssl.c
+===================================================================
+--- cryptsetup-2.4.3.orig/lib/crypto_backend/crypto_openssl.c
++++ cryptsetup-2.4.3/lib/crypto_backend/crypto_openssl.c
+@@ -809,3 +809,29 @@ out:
+ 	return -ENOTSUP;
+ #endif
+ }
++
++#if !ENABLE_FIPS
++bool crypt_fips_mode(void) { return false; }
++#else
++static bool openssl_fips_mode(void)
++{
++#if OPENSSL_VERSION_MAJOR >= 3
++	return EVP_default_properties_is_fips_enabled(NULL);
++#else
++	return FIPS_mode();
++#endif
++}
++
++bool crypt_fips_mode(void)
++{
++	static bool fips_mode = false, fips_checked = false;
++
++	if (fips_checked)
++		return fips_mode;
++
++	fips_mode = openssl_fips_mode();
++	fips_checked = true;
++
++	return fips_mode;
++}
++#endif /* ENABLE FIPS */
+Index: cryptsetup-2.4.3/lib/internal.h
+===================================================================
+--- cryptsetup-2.4.3.orig/lib/internal.h
++++ cryptsetup-2.4.3/lib/internal.h
+@@ -38,7 +38,6 @@
+ #include "utils_crypt.h"
+ #include "utils_loop.h"
+ #include "utils_dm.h"
+-#include "utils_fips.h"
+ #include "utils_keyring.h"
+ #include "utils_io.h"
+ #include "crypto_backend/crypto_backend.h"
+Index: cryptsetup-2.4.3/po/POTFILES.in
+===================================================================
+--- cryptsetup-2.4.3.orig/po/POTFILES.in
++++ cryptsetup-2.4.3/po/POTFILES.in
+@@ -6,7 +6,6 @@ lib/volumekey.c
+ lib/crypt_plain.c
+ lib/utils_crypt.c
+ lib/utils_loop.c
+-lib/utils_fips.c
+ lib/utils_device.c
+ lib/utils_devpath.c
+ lib/utils_pbkdf.c
+Index: cryptsetup-2.4.3/src/cryptsetup.h
+===================================================================
+--- cryptsetup-2.4.3.orig/src/cryptsetup.h
++++ cryptsetup-2.4.3/src/cryptsetup.h
+@@ -44,7 +44,6 @@
+ #include "lib/bitops.h"
+ #include "lib/utils_crypt.h"
+ #include "lib/utils_loop.h"
+-#include "lib/utils_fips.h"
+ #include "lib/utils_io.h"
+ #include "lib/utils_blkid.h"
+ #include "lib/libcryptsetup_macros.h"
+Index: cryptsetup-2.4.3/tests/compat-test
+===================================================================
+--- cryptsetup-2.4.3.orig/tests/compat-test
++++ cryptsetup-2.4.3/tests/compat-test
+@@ -44,7 +44,7 @@ KEY_MATERIAL5_EXT="S331776-395264"
+ TEST_UUID="12345678-1234-1234-1234-123456789abc"
+ 
+ LOOPDEV=$(losetup -f 2>/dev/null)
+-[ -f /etc/system-fips ] && FIPS_MODE=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
++FIPS_MODE=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
+ 
+ # Circumvent test failure due to Bionic builder; we need to decrease
+ # the memlock limit here to mimic Xenial builder (see LP #1891473).
+Index: cryptsetup-2.4.3/tests/compat-test2
+===================================================================
+--- cryptsetup-2.4.3.orig/tests/compat-test2
++++ cryptsetup-2.4.3/tests/compat-test2
+@@ -42,7 +42,7 @@ FAST_PBKDF_OPT="--pbkdf pbkdf2 --pbkdf-f
+ TEST_UUID="12345678-1234-1234-1234-123456789abc"
+ 
+ LOOPDEV=$(losetup -f 2>/dev/null)
+-[ -f /etc/system-fips ] && FIPS_MODE=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
++FIPS_MODE=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
+ 
+ function remove_mapping()
+ {
+Index: cryptsetup-2.4.3/tests/keyring-compat-test
+===================================================================
+--- cryptsetup-2.4.3.orig/tests/keyring-compat-test
++++ cryptsetup-2.4.3/tests/keyring-compat-test
+@@ -26,7 +26,7 @@ PWD="aaa"
+ [ -z "$CRYPTSETUP_PATH" ] && CRYPTSETUP_PATH=".."
+ CRYPTSETUP=$CRYPTSETUP_PATH/cryptsetup
+ 
+-[ -f /etc/system-fips ] && FIPS_MODE=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
++FIPS_MODE=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
+ 
+ function remove_mapping()
+ {
+Index: cryptsetup-2.4.3/tests/luks2-reencryption-test
+===================================================================
+--- cryptsetup-2.4.3.orig/tests/luks2-reencryption-test
++++ cryptsetup-2.4.3/tests/luks2-reencryption-test
+@@ -25,7 +25,7 @@ PWD2="1cND4319812f"
+ PWD3="1-9Qu5Ejfnqv"
+ DEV_LINK="reenc-test-link"
+ 
+-[ -f /etc/system-fips ] && FIPS_MODE=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
++FIPS_MODE=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)
+ 
+ function dm_crypt_features()
+ {

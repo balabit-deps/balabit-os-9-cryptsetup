@@ -1,0 +1,47 @@
+From 05a237be2a6c7a342fb5aba4433aec487a08317f Mon Sep 17 00:00:00 2001
+From: Milan Broz <gmazyland@gmail.com>
+Date: Fri, 21 Jan 2022 09:47:13 +0100
+Subject: [PATCH] Fix PBKDF benchmark in OpenSSL3 FIPS mode.
+
+OpenSSL now enforces minimal parameters for PBKDF2 according to SP 800-132
+key length (112 bits), minimal salt length (128 bits) and minimal number
+of iterations (1000).
+
+Our benchmark violates this, causeing cryptsetup misbehave for luksFormat.
+
+Just inrease tet salt to 16 bytes here, it will little bit influence benchmark,
+but there is no way back.
+---
+ lib/utils_benchmark.c | 2 +-
+ src/cryptsetup.c      | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/lib/utils_benchmark.c b/lib/utils_benchmark.c
+index 7a9736d83b..24e7bccc64 100644
+--- a/lib/utils_benchmark.c
++++ b/lib/utils_benchmark.c
+@@ -184,7 +184,7 @@ int crypt_benchmark_pbkdf_internal(struct crypt_device *cd,
+ 		pbkdf->parallel_threads = 0; /* N/A in PBKDF2 */
+ 		pbkdf->max_memory_kb = 0; /* N/A in PBKDF2 */
+ 
+-		r = crypt_benchmark_pbkdf(cd, pbkdf, "foo", 3, "bar", 3,
++		r = crypt_benchmark_pbkdf(cd, pbkdf, "foo", 3, "01234567890abcdef", 16,
+ 					volume_key_size, &benchmark_callback, &u);
+ 		pbkdf->time_ms = ms_tmp;
+ 		if (r < 0) {
+diff --git a/src/cryptsetup.c b/src/cryptsetup.c
+index e529b7ace4..37d35c92c1 100644
+--- a/src/cryptsetup.c
++++ b/src/cryptsetup.c
+@@ -860,7 +860,7 @@ static int action_benchmark_kdf(const char *kdf, const char *hash, size_t key_si
+ 			.time_ms = 1000,
+ 		};
+ 
+-		r = crypt_benchmark_pbkdf(NULL, &pbkdf, "foo", 3, "bar", 3, key_size,
++		r = crypt_benchmark_pbkdf(NULL, &pbkdf, "foo", 3, "0123456789abcdef", 16, key_size,
+ 					&benchmark_callback, &pbkdf);
+ 		if (r < 0)
+ 			log_std(_("PBKDF2-%-9s     N/A\n"), hash);
+-- 
+2.34.1
+

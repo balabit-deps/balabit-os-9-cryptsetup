@@ -29,6 +29,7 @@ override_dh_auto_configure:
 		--with-tmpfilesdir=/usr/lib/tmpfiles.d \
 		--enable-libargon2 \
 		--enable-shared \
+		--enable-fips \
 		--enable-cryptsetup-reencrypt
 
 execute_after_dh_auto_build:

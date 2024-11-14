@@ -1,3 +1,11 @@
+cryptsetup (2:2.4.3-1ubuntu1.3) jammy; urgency=medium
+
+  * Refine proc mounts entries traversal (LP: #2054390)
+    - d/functions: Backport upstream commit 95fd4be9b4c6: d/functions:
+      get_mnt_devno(): Speed up execution time on large /proc/mounts.
+
+ -- Chengen Du <chengen.du@canonical.com>  Thu, 14 Nov 2024 03:21:19 +0000
+
 cryptsetup (2:2.4.3-1ubuntu1.2) jammy; urgency=medium
 
   * Cherry-pick modern support for FIPS enabled backends. LP: #2032659

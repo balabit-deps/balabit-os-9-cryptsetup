@@ -607,27 +607,47 @@ _resolve_device() {
 #   Return 0 on success, 1 on error (if $mountpoint is not a mountpoint).
 #   devno will be empty if the filesystem must be excluded.
 get_mnt_devno() {
-    local wantmount="$1" devnos="" uuid dev IFS
-    local spec mountpoint fstype _ DEV MAJ MIN
+    local wantmount="$1" devnos="" uuid dev
+    local out spec fstype DEV MAJ MIN
 
-    while IFS=" 	" read -r spec mountpoint fstype _; do
-        # treat lines starting with '#' as comments; /proc/mounts
-        # doesn't seem to contain these but per procfs(5) the format of
-        # that file is analogous to fstab(5)'s
-        if [ "${spec#\#}" = "$spec" ] && [ -n "$spec" ] &&
-                [ "$(printf '%b' "$mountpoint")" = "$wantmount" ]; then
-            # take the last mountpoint if used several times (shadowed)
-            unset -v devnos
-            spec="$(printf '%b' "$spec")"
-            fstype="$(printf '%b' "$fstype")"
-            if [ "$fstype" = "zfs" ]; then
-                # Ignore ZFS entries as they don't have a major/minor and won't
-                # be imported when local-top cryptroot script will ran.
-                # Returns success with empty devno
-                printf ''
-                return 0
-            fi
-            _resolve_device "$spec" || continue # _resolve_device() already warns on error
+    # use awk rather than a `while read; do done` loop here as /proc/mounts
+    # can be many thousands lines long and the `read` builtin goes one
+    # read(2) at the time which slows down execution time, see MR !36
+    out="$(awk -v mp="$wantmount" -- '
+        BEGIN {
+            FS = "[ \t]"
+            ret = ""
+        }
+        !/^\s*(#|$)/ {
+            # decode octal sequences; per procfs(5) the format of /proc/mounts
+            # is analogous to fstab(5)
+            head = ""
+            while (match($2, /\\[0-7]{3}/)) {
+                oct = substr($2, RSTART+1, RLENGTH-1)
+                dec = (substr(oct, 1, 1) * 8 + substr(oct, 2, 1)) * 8 + substr(oct, 3, 1)
+                head = head substr($2, 1, RSTART-1) sprintf("%c", dec)
+                $2 = substr($2, RSTART+RLENGTH)
+            }
+            if (head $2 == mp) {
+                # take the last mountpoint if used several times (shadowed)
+                ret = $1 "	" $3
+            }
+        }
+        END {
+            print ret
+        }' </proc/mounts)" || out=""
+
+    spec="$(printf '%b' "${out%	*}")"
+    if [ -n "$out" ]; then
+        fstype="${out##*	}"
+        if [ "$fstype" = "zfs" ]; then
+            # Ignore ZFS entries as they don't have a major/minor and won't
+            # be imported when local-top cryptroot script will ran.
+            # Returns success with empty devno
+            printf ''
+            return 0
+        fi
+        if _resolve_device "$spec"; then # _resolve_device() already warns on error
             if [ "$fstype" = "btrfs" ]; then
                 # btrfs can span over multiple devices
                 if uuid="$(_device_uuid "$DEV")"; then
@@ -641,7 +661,7 @@ get_mnt_devno() {
                 devnos="$MAJ:$MIN"
             fi
         fi
-    done </proc/mounts
+    fi
 
     if [ -z "${devnos:+x}" ]; then
         return 1 # not found
